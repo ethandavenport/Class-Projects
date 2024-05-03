@@ -1,0 +1,134 @@
+---
+title: "Semester Project: Final Paper"
+author: "Ethan Davenport"
+date: 
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Introduction
+
+Every 10 years, the United States performs a new census, and subsequently, each state redraws the boundaries for its electoral districts. However, critics argue that state legislatures are prone to drawing districts favorable to their party. How does the party composition of the state legislature responsible for the redistricting process affect the level of gerrymandering in a state?
+
+### Data Description
+
+I obtained data from multiple sources, each of which has one state as the observation level. Most data sets contain information about the results from the 2012 election. The only exception is for the breakdown in state legislature, where 2011 data is relevant because I care about the party affiliation of the state legislature responsible for redistricting. This time frame was chosen because 2022 data was not always available and the 2012 election was nearest to the 2010 redistricting process, so it should best be able to capture the effects of that process compared to any subsequent elections. In all of these datasets, there will be 50 observations, not including Washington DC and other territories, which I ignored for the purposes of this project.
+
+```{r}
+correlates <- read.csv("correlates2-6.csv")
+correlates <- correlates[correlates$year==2011, ]
+correlates <- subset(correlates, select=c("st","propgopleg"))
+
+congresults12 <- read.csv("2012congresults.csv")
+congresults12$repvote <- congresults12$General.Republican / 
+  (congresults12$General.Democratic + congresults12$General.Republican)
+congresults12 <- subset(congresults12, select=c("State","repvote"))
+
+houseresults <- read.csv("2012houseresults.csv")
+houseresults$proprepseats <- houseresults$Republican / houseresults$Seats
+houseresults <- subset(houseresults, select=c("State","Seats","proprepseats"))
+
+redistrictors <- data.frame("State" = c("AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA",'HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY'),
+                            "Method" = c('SL','AL','CO','SL','CO','SL','SL','AL','SL','SL','CO','CO','SL','SL','SL','SL','SL','SL','SL','SL','SL','SL','SL','SL','SL','AL','SL','SL','SL','CO','SL','SL','SL','AL','SL','SL','SL','SL','SL','SL','AL','SL','SL','SL','AL','SL','CO','SL','SL','AL'))
+```
+
+The first dataset comes from the Michigan State IPPSR, which collects thousands of variables, though I've only used one called `propgopleg`, which denotes the proportion of the 2011 state legislature seats held by Republicans. This is my proxy for party affiliation of the state legislature. The second dataset comes from the FEC, and it held raw state-wide vote counts for each party in the 2012 US Congressional election. I created a new column called `repvote` to convert these raw numbers into a proportion of the two-party vote won by the Republican candidate. The third dataset is copied from Wikipedia, and it simply denotes the number of seats won by each party in each state in the 2012 US Congressional election. I created a new column called `proprepseats`, which denotes the proportion of these seats won by Republicans. I kept all of these variables in terms of proportions of Republicans to ensure consistency across my variables. The fourth data set is manually created using information from Bloomberg Government about who is responsible for redistricting in each state, denoted in a column called `Method`. In most states, the state legislature ('SL') is responsible for redistricting. In some states though, this is done by a separate commission ('CO') or nobody since there is only one at-large seat available ('AL'). This process was feasible because I only have 50 total observations, as opposed to hundreds or thousands.
+
+URLs for the websites used:
+
+https://www.fec.gov/introduction-campaign-finance/election-results-and-voting-information/
+
+https://ippsr.msu.edu/public-policy/correlates-state-policy
+
+https://en.wikipedia.org/wiki/2012_United_States_House_of_Representatives_elections
+
+https://about.bgov.com/brief/who-draws-congressional-districts/
+
+```{r}
+df <- merge(correlates, congresults12, by.x="st", by.y="State")
+df <- merge(df, houseresults, by.x="st", by.y="State")
+df <- merge(df, redistrictors, by.x="st", by.y="State")
+df <- df[df$st!="DC" & df$Method!="AL",]
+df[25, "propgopleg"] <- 32/49 *100
+
+attach(df)
+```
+
+After loading in all my datasets, changing values from raw numbers to proportions, and isolating the variables relevant to my analysis, the next step was to merge these datasets together. I performed this process one dataset by one, matching on state abbreviation each time, resulting in my final dataset called df. After this was complete, I removed Washington DC as well as any states with only one at-large seat available, since there is no redistricting process in these states, so they tell us nothing about gerrymandering. This left 43 states remaining to perform my analysis. However, I noticed an anomaly in my data: there was a null value for `propgopleg` for the state of Nebraska. My assumption is that this has something to do with the fact that Nebraska is the only unicameral state legislature in the country. So, I found that post-2010 election, the Nebraska legislature had 32 Republicans out of 49 representatives, and I manually inserted this value into my data.
+
+```{r}
+repvote <- df$repvote*100
+proprepseats <- df$proprepseats*100
+repgerrymander <- proprepseats - repvote
+gerrymagnitude <- abs(repgerrymander)
+partisanship <- abs(propgopleg - 50)
+
+library(car)
+commission <- recode(Method, "'CO'=1; 'SL'=0; else=NA")
+```
+
+At this point, I still wanted to create a few new variables before performing my analysis. First, I re-scaled `repvote`and `proprepseats` to be on a 0-100 scale rather than a 0-1 scale, and this was for two reasons. I wanted the scale of these variables to be consistent with `propgopleg`, and the 0-100 scale allowed for easier interpretability when running the regression analyses. Next, I created a variable for the difference between the proportion of Republican votes in a state and the proportion of Republican seats won in the election, called `repgerrymander`. This is my proxy for the level of gerrymandering that occurs within a state (aka my dependent variable), and it is encoded in such a way where positive values reflect the election outcome was more favorable for Republicans than the vote percentages would suggest, and vice versa. Additionally, I was curious to look at these variables on a scale of magnitude, irrespective of party. I created a variable called `gerrymagnitude`, which takes the absolute value of `repgerrymander` to denote the positive difference between proportion of votes per party and proportion of seats won per party. Next, I created a variable called `partisanship`, which finds each state legislature's difference from being 50%-50% along party lines. Finally, I recoded `Method` into a binary variable called `commission` for whether or not redistricting was performed by a separate commission rather than the state legislature, changing [CO] to [1] and [SL] to [0].
+
+### Descriptive Analyses
+
+```{r}
+head(df[order(repgerrymander), ])
+tail(df[order(repgerrymander), ])
+```
+
+These first tables show the states that have the largest difference between proportion of votes and proportion of seats won. Favoring Democrats are the states of New Hampshire, Rhode Island, Maine, Connecticut, Hawaii, and Massachusetts. Favoring Republicans are the states of Indiana, South Carolina, Arkansas, Oklahoma, Idaho, and Nebraska. These are smaller states, where it's easier for the proportion of Republican seats won to be closer to 0 or 1 (i.e. only two seats, both won by the same party).
+
+```{r}
+hist(repgerrymander)
+mean(repgerrymander)
+```
+
+This histogram gives an overview of the distribution of how proportion of Republican seats won differs from proportion of Republican vote. As expected, this distribution roughly centers around 0, though it does have a left skew and appears more states fall on the positive side of the scale. This indicates more states have election outcomes that overly favor Republicans than those that overly favor Democrats. The mean of 3.32% confirms this idea, although the mean is not weighted for size of the state.
+
+```{r}
+hist(gerrymagnitude)
+mean(gerrymagnitude)
+```
+
+This histogram gives an overview of the distribution of how proportion of seats won differs from proportion of the vote, regardless of party. This distribution has a right-skew, with the majority of states having lower vales, and a few higher outliers. The mean indicates that for the average state, the proportion of seats won differs from the proportion of the vote by 18.6%. This feels like a large discrepancy, though for many small states, it's impossible for the proportion of seats won to be very close to the proportion of votes.
+
+### Main Analyses
+
+First, I would like to note: several times in this section, I refer to 'election outcomes'. When I say this, I am referring to the difference between the proportion of seats won and the proportion of votes received by that party. I am not implying that certain independent variables are affecting people's voting behavior, rather the election results relative to this voting behavior. This is just to simplify the language used in my analysis and make it flow better.
+
+```{r}
+cor(repgerrymander, propgopleg)
+summary(lm(repgerrymander ~ propgopleg))
+```
+
+The first regression I decided to run was a simple bivariate linear regression predicting `repgerrymander` from `propgopleg`. These variables are moderately correlated at 0.54, so I'm expecting to see a statistically significant result. The slope coefficient was indeed highly statistically significant, indicating I can conclude that the party makeup of the state legislature affects election outcomes. As a practical matter, the slope coefficient indicates that for each 1% increase in the proportion of state legislature that is Republican, we expect the proportion of seats won by Republicans relative to the proportion of Republican votes to increase 0.73%. This is a practically significant result which suggests state legislatures with vastly different party makeups are expected to have vastly different gerrymandering effects. However, I would at least need to consider more control variables in order to claim a causal relationship here.
+
+```{r}
+summary(lm(repgerrymander ~ propgopleg * commission))
+```
+
+The second linear regression I decided to run predicted `repgerrymander` from `propgopleg`, `commission`, and the interaction between the two. I included the interaction term because I hypothesized that the party makeup of the state legislature would impact election outcomes differently in states where the state legislature was not in charge of redistricting (i.e. maybe commissions would be less prone to gerrymandering regardless of the state legislature's party makeup). The intercept and slope coefficient for `propgopleg` hardly changed from the bivariate regression. The coefficient for `commission` indicates that the existence of a separate commission changes the expected value of gerrymandering slightly in favor of Democrats by an 'intercept shift' of 2.4%. However, this value is not statistically significant accordingly to the large p-value, nor would I consider it to be very practically significant. Surprisingly, the interaction term has a coefficient of essentially zero and is extremely non-statistically significant. This contradicts my hypothesis, and suggests that redistricting commissions might not be so independent, possibly exhibiting the same gerrymandering biases as state legislatures.
+
+```{r}
+cor(gerrymagnitude, partisanship)
+summary(lm(gerrymagnitude ~ partisanship))
+```
+
+Next, I wanted to explore the idea of whether state legislatures with a large party imbalance (regardless of which party had the majority) were more likely to be involved in gerrymandering. So, the third regression I ran was another bivariate linear regression predicting `gerrymagnitude` from `partisanship`. These variables are moderately correlated at 0.41, so I'm expecting to see a statistically significant result. The intercept indicates that for a state legislature that is perfectly 50-50 in Democrats and Republicans, we would expect the proportion of seats won to be naturally different from proportion of votes by 11.5%. The slope coefficient is statistically significant, indicating I can conclude that more partisan state legislatures affect election outcomes, increasing this difference between proportion of seats won and proportion of votes. For each additional 1% above 50% held by the majority party in the state legislature, we expect the proportion of seats won relative to the proportion of votes to increase 0.52%. Similar to the other bivariate regression, this is a practically significant result which suggests state legislatures that are far more partisan are expected to have higher gerrymandering effects. Again though, I would at least need to consider more control variables in order to claim a causal relationship here.
+
+```{r}
+summary(lm(gerrymagnitude ~ partisanship * commission))
+```
+
+The fourth and final linear regression I decided to run predicted `gerrymagnitude` from `partisanship`, `commission`, and the interaction between the two. Again, I wanted to test this hypothesis about whether the relationship between a state legislature's partisanship and the magnitude of gerrymandering would be different for states with separate commissions for redistricting. And again, neither the intercept nor the slope intercept for `partisanship` changed by very much, and both retained their statistical significance. This time, the coefficient for `commission` was much larger, indicating the existence of a separate commission greatly reduces the expected amount of gerrymandering by an 'intercept shift' of 16.2%. The coefficient of the interaction term indicates that the existence of a separate commission only exacerbates the impact of a state legislature's partisanship on the amount of gerrymandering. However, both of these last two coefficients have very large standard errors and are not statistically significant, mostly due to the fact that there are only six states with separate commissions for redistricting. These have the potential to be practically significant, but I simply don't have enough data to make any conclusive claims about these effects.
+
+### Discussion
+
+In the previous section, I analyzed how a state legislature's party makeup affects election outcomes, as well as how the partisanship of a state's legislature affects the extent to which election outcomes appear gerrymandered. I found that states with a higher proportion of Republicans in legislature had a discrepancy of proportion of Republicans winning seats that was higher than the proportion of the two-party vote received by Republicans. This trend is not exclusive to Republicans, though; the opposite is true for states with a higher proportion of Democrats in legislature. Similarly, I found that states with a larger party majority in their legislature had a higher discrepancy between proportion of seats won and proportion of the two-party vote won in an analysis that was blind to which party held the majority.
+
+These results did not particularly surprise me. The result that did challenge my previous assumptions, though, was the preliminary evidence gathered around redistricting by separate commissions. I found that the change in effect of state legislature makeup on gerrymandering was not statistically significant for states where redistricting is performed by a separate commission, when compared to states where the state legislature is in charge. This may suggest that state legislatures may exert some influence on separate commissions, or that these commissions are not totally independent, unbiased bodies. However, these results must be taken with (at least one) grain of salt, as the dataset used for this analysis only contains six states where redistricting is performed by a separate commission.
+
+These results can certainly be improved and extended, as there are certain limitation to these results. This dataset was very small, with only 43 observations. Even though I found statistically significant relationships, I would want to prove these to be more robust relationships with a larger dataset. Because of the size of this dataset, the standard error tended to be fairly large even in these statistically significant coefficients at around 17-21%. Additionally, there are probably more advanced ways to measure the amount of gerrymandering that occurs within a state. There is inherent random variability in the difference between proportion of votes and proportion of seats won, even with gerrymandering absent. 
